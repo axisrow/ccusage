@@ -38,5 +38,6 @@ Cache read and creation tokens remain separate usage fields and use the cached-i
 rate. ZCode stores no USD cost, so `auto` and `calculate` use token pricing and
 `display` reports zero; GLM-5.2 is provided as a built-in offline fallback.
 
-`started_at` is interpreted as Unix milliseconds. `reasoning_tokens` is
-preserved in totals and charged at the output rate.
+`started_at` is interpreted as Unix milliseconds. ZCode already includes
+`reasoning_tokens` in its output-token accounting, so ccusage does not count it
+a second time.

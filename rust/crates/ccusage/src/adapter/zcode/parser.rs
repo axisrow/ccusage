@@ -15,12 +15,11 @@ pub(super) struct ZCodeEntry {
     pub(super) timestamp: TimestampMs,
     pub(super) directory: Option<String>,
     pub(super) usage: TokenUsageRaw,
-    pub(super) reasoning_tokens: u64,
 }
 
 pub(super) fn read_model_usage_row(statement: &sqlite::Statement<'_>) -> Option<ZCodeEntry> {
-    let id = statement.read::<String, _>(0).ok()?;
-    let session_id = statement.read::<String, _>(1).ok()?;
+    let id = read_string(statement, 0)?;
+    let session_id = read_string(statement, 1)?;
     let model = statement.read::<String, _>(2).ok()?.trim().to_string();
     let started_at = read_i64(statement, 3)?;
     let timestamp = (started_at > 0).then(|| TimestampMs::from_millis(started_at))?;
@@ -29,7 +28,6 @@ pub(super) fn read_model_usage_row(statement: &sqlite::Statement<'_>) -> Option<
     }
     let input_tokens = read_u64(statement, 4);
     let output_tokens = read_u64(statement, 5);
-    let reasoning_tokens = read_u64(statement, 6);
     let cache_creation_input_tokens = read_u64(statement, 7);
     let cache_read_input_tokens = read_u64(statement, 8);
     let fresh_input_tokens = input_tokens
@@ -37,7 +35,6 @@ pub(super) fn read_model_usage_row(statement: &sqlite::Statement<'_>) -> Option<
         .saturating_sub(cache_creation_input_tokens);
     if fresh_input_tokens == 0
         && output_tokens == 0
-        && reasoning_tokens == 0
         && cache_creation_input_tokens == 0
         && cache_read_input_tokens == 0
     {
@@ -61,8 +58,21 @@ pub(super) fn read_model_usage_row(statement: &sqlite::Statement<'_>) -> Option<
             speed: None,
             cache_creation: None,
         },
-        reasoning_tokens,
     })
+}
+
+fn read_string(statement: &sqlite::Statement<'_>, index: usize) -> Option<String> {
+    statement
+        .read::<String, _>(index)
+        .ok()
+        .or_else(|| read_i64(statement, index).map(|value| value.to_string()))
+        .or_else(|| {
+            statement
+                .read::<f64, _>(index)
+                .ok()
+                .filter(|value| value.is_finite())
+                .map(|value| value.to_string())
+        })
 }
 
 fn read_i64(statement: &sqlite::Statement<'_>, index: usize) -> Option<i64> {
@@ -88,10 +98,6 @@ pub(super) fn to_loaded_entry(
     pricing: &PricingMap,
 ) -> LoadedEntry {
     let cost_usage = TokenUsageRaw {
-        output_tokens: entry
-            .usage
-            .output_tokens
-            .saturating_add(entry.reasoning_tokens),
         cache_creation: None,
         ..entry.usage
     };
@@ -99,13 +105,7 @@ pub(super) fn to_loaded_entry(
     let cost = candidates
         .iter()
         .map(|candidate| {
-            calculate_cost_for_usage(
-                Some(candidate),
-                cost_usage,
-                None,
-                mode,
-                Some(pricing),
-            )
+            calculate_cost_for_usage(Some(candidate), cost_usage, None, mode, Some(pricing))
         })
         .find(|cost| *cost > 0.0)
         .unwrap_or(0.0);
@@ -143,7 +143,7 @@ pub(super) fn to_loaded_entry(
         project_path: Arc::from(project_path),
         cost,
         credits: None,
-        extra_total_tokens: entry.reasoning_tokens,
+        extra_total_tokens: 0,
         message_count: None,
         model: Some(entry.model),
         usage_limit_reset_time: None,
@@ -153,7 +153,10 @@ pub(super) fn to_loaded_entry(
 }
 
 fn model_candidates(model: &str) -> Vec<String> {
-    let candidates = [model.to_string(), format!("zai/{}", model.to_ascii_lowercase())];
+    let candidates = [
+        model.to_string(),
+        format!("zai/{}", model.to_ascii_lowercase()),
+    ];
     let mut seen = HashSet::new();
     candidates
         .into_iter()
@@ -182,14 +185,13 @@ mod tests {
                 speed: None,
                 cache_creation: None,
             },
-            reasoning_tokens: 50,
         };
 
         let loaded = to_loaded_entry(entry, None, CostMode::Calculate, &pricing);
 
         assert_eq!(loaded.data.message.usage.input_tokens, 700);
-        assert_eq!(loaded.extra_total_tokens, 50);
-        assert!((loaded.cost - 0.002_598).abs() < 1e-12);
+        assert_eq!(loaded.extra_total_tokens, 0);
+        assert!((loaded.cost - 0.002_378).abs() < 1e-12);
     }
 
     #[test]
@@ -209,7 +211,6 @@ mod tests {
                 speed: None,
                 cache_creation: None,
             },
-            reasoning_tokens: 0,
         };
 
         let loaded = to_loaded_entry(entry, None, CostMode::Display, &pricing);

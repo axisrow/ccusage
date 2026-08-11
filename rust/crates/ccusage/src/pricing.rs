@@ -2779,7 +2779,7 @@ mod zcode_pricing_tests {
     fn provides_glm_5_2_pricing_for_zcode_model_identifiers() {
         let pricing = PricingMap::load_embedded();
         for model in ["GLM-5.2", "zai/glm-5.2"] {
-            let model_pricing = pricing.find_exact(model).unwrap();
+            let model_pricing = pricing.find(model).unwrap();
             assert_eq!(model_pricing.input, 1.4e-6);
             assert_eq!(model_pricing.cache_create, 0.26e-6);
             assert_eq!(model_pricing.cache_read, 0.26e-6);

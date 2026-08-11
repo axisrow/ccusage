@@ -75,7 +75,7 @@ mod tests {
     use crate::{TokenUsageRaw, UsageEntry, UsageMessage};
 
     #[test]
-    fn aggregates_zcode_fresh_input_cache_and_reasoning_tokens() {
+    fn aggregates_zcode_fresh_input_and_cache_tokens() {
         let entry = LoadedEntry {
             data: UsageEntry {
                 session_id: Some("session-1".to_string()),
@@ -103,9 +103,9 @@ mod tests {
             project: Arc::from("zcode"),
             session_id: Arc::from("session-1"),
             project_path: Arc::from("/workspace/zcode"),
-            cost: 0.002_598,
+            cost: 0.002_378,
             credits: None,
-            extra_total_tokens: 50,
+            extra_total_tokens: 0,
             message_count: None,
             model: Some("GLM-5.2".to_string()),
             usage_limit_reset_time: None,
@@ -115,9 +115,10 @@ mod tests {
         let rows = summarize_entries(&[entry], AgentReportKind::Daily).unwrap();
         let report = report_from_rows(&rows, AgentReportKind::Daily);
 
+        insta::assert_json_snapshot!(report);
         assert_eq!(report["daily"][0]["inputTokens"], 700);
         assert_eq!(report["daily"][0]["cacheCreationTokens"], 100);
         assert_eq!(report["daily"][0]["cacheReadTokens"], 200);
-        assert_eq!(report["daily"][0]["totalTokens"], 1_350);
+        assert_eq!(report["daily"][0]["totalTokens"], 1_300);
     }
 }

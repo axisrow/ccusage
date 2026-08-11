@@ -769,6 +769,7 @@ fn is_command(arg: &str) -> bool {
             | "gemini"
             | "kimi"
             | "qwen"
+            | "zcode"
     )
 }
 

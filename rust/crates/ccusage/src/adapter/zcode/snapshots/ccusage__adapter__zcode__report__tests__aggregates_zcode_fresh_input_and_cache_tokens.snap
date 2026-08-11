@@ -1,0 +1,29 @@
+---
+source: crates/ccusage/src/adapter/zcode/report.rs
+assertion_line: 118
+expression: report
+---
+{
+  "daily": [
+    {
+      "cacheCreationTokens": 100,
+      "cacheReadTokens": 200,
+      "date": "2025-01-01",
+      "inputTokens": 700,
+      "modelsUsed": [
+        "GLM-5.2"
+      ],
+      "outputTokens": 300,
+      "totalCost": 0.002378,
+      "totalTokens": 1300
+    }
+  ],
+  "totals": {
+    "cacheCreationTokens": 100,
+    "cacheReadTokens": 200,
+    "inputTokens": 700,
+    "outputTokens": 300,
+    "totalCost": 0.002378,
+    "totalTokens": 1300
+  }
+}

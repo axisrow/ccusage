@@ -9,8 +9,8 @@ use super::{
 
 const MODEL_USAGE_QUERY: &str = r#"
 SELECT
-    CAST(mu.id AS TEXT),
-    CAST(mu.session_id AS TEXT),
+    mu.id,
+    mu.session_id,
     mu.model_id,
     mu.started_at,
     mu.input_tokens,
@@ -126,6 +126,7 @@ mod tests {
             .unwrap();
         db.execute("INSERT INTO model_usage VALUES (2, 'session-1', 'GLM-5.2', 'running', 1735689601123, 900, 200, 0, 0, 0)")
             .unwrap();
+        drop(db);
 
         let shared = SharedArgs {
             timezone: Some("UTC".to_string()),
@@ -148,8 +149,11 @@ mod tests {
         assert_eq!(entries[0].date, "2025-01-01");
         assert_eq!(entries[0].data.message.usage.input_tokens, 700);
         assert_eq!(entries[0].data.message.usage.cache_read_input_tokens, 200);
-        assert_eq!(entries[0].data.message.usage.cache_creation_input_tokens, 100);
-        assert_eq!(entries[0].extra_total_tokens, 50);
+        assert_eq!(
+            entries[0].data.message.usage.cache_creation_input_tokens,
+            100
+        );
+        assert_eq!(entries[0].extra_total_tokens, 0);
         assert_eq!(entries[0].project_path.as_ref(), "/workspace/zcode");
     }
 

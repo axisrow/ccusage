@@ -1146,8 +1146,7 @@ mod tests {
             &[
                 "$schema", "amp", "claude", "codebuff", "codex", "commands", "copilot", "defaults",
                 "gemini", "goose", "hermes", "kilo", "kimi", "opencode", "openclaw", "pi", "qwen",
-                "zcode",
-                "droid",
+                "zcode", "droid",
             ],
         );
         assert!(
