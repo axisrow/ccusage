@@ -20,6 +20,7 @@ pub(crate) mod openclaw;
 pub(crate) mod opencode;
 pub(crate) mod pi;
 pub(crate) mod qwen;
+pub(crate) mod zcode;
 
 /// Reads `files` by applying `read` to each path and returns the per-file
 /// results in the **original file order**.

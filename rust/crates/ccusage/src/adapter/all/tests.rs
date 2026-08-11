@@ -970,3 +970,8 @@ fn full_table_columns_include_cache_and_total_token_metrics() {
     );
     assert_eq!(headers.len(), aligns.len());
 }
+
+#[test]
+fn built_in_agents_include_zcode() {
+    assert!(BUILT_IN_AGENT_NAMES.contains(&"zcode"));
+}

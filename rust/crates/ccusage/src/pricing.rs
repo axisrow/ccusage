@@ -1135,6 +1135,15 @@ impl PricingMap {
                 ..glm_base
             },
         );
+        let glm_5_2 = Pricing {
+            input: 1.4e-6,
+            output: 4.4e-6,
+            cache_create: 0.26e-6,
+            cache_read: 0.26e-6,
+            ..glm_base
+        };
+        self.entries.insert("GLM-5.2".to_string(), glm_5_2);
+        self.entries.insert("zai/glm-5.2".to_string(), glm_5_2);
         self.context_limits.insert("gpt-5.5".to_string(), 1_050_000);
         self.context_limits
             .insert("grok-4.3".to_string(), 1_000_000);
@@ -2758,6 +2767,23 @@ mod tests {
             assert_eq!(entry.cache_read, 5e-7); // explicit value, not 2e-7
             // cache_create still scaled since not explicitly provided
             assert!((entry.cache_create - 2.5e-6).abs() < 1e-15);
+        }
+    }
+}
+
+#[cfg(test)]
+mod zcode_pricing_tests {
+    use super::*;
+
+    #[test]
+    fn provides_glm_5_2_pricing_for_zcode_model_identifiers() {
+        let pricing = PricingMap::load_embedded();
+        for model in ["GLM-5.2", "zai/glm-5.2"] {
+            let model_pricing = pricing.find_exact(model).unwrap();
+            assert_eq!(model_pricing.input, 1.4e-6);
+            assert_eq!(model_pricing.cache_create, 0.26e-6);
+            assert_eq!(model_pricing.cache_read, 0.26e-6);
+            assert_eq!(model_pricing.output, 4.4e-6);
         }
     }
 }

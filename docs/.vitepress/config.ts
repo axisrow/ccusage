@@ -77,6 +77,7 @@ export default defineConfig({
 						{ text: 'Hermes Agent', link: '/guide/hermes/' },
 						{ text: 'pi-agent', link: '/guide/pi/' },
 						{ text: 'Goose', link: '/guide/goose/' },
+						{ text: 'ZCode (Z.ai)', link: '/guide/zcode/' },
 						{ text: 'Kilo', link: '/guide/kilo/' },
 						{ text: 'Qwen', link: '/guide/qwen/' },
 						{ text: 'GitHub Copilot CLI', link: '/guide/copilot/' },
