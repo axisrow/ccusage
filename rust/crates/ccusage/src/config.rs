@@ -782,6 +782,33 @@ mod tests {
     }
 
     #[test]
+    fn applies_zcode_agent_defaults_and_daily_options() {
+        let command = detect_config_command(&["zcode".to_string(), "daily".to_string()]);
+        assert_eq!(command.agent.as_deref(), Some("zcode"));
+        assert_eq!(command.report, "daily");
+
+        let config = context(
+            json!({
+                "zcode": {
+                    "defaults": { "timezone": "Asia/Tokyo", "offline": true },
+                    "commands": { "daily": { "since": "2026-02-03", "noCost": true } }
+                }
+            }),
+            "zcode daily",
+            Some("zcode"),
+            "daily",
+        );
+        let mut shared = SharedArgs::default();
+
+        apply_config_to_shared(&mut shared, &config);
+
+        assert_eq!(shared.timezone.as_deref(), Some("Asia/Tokyo"));
+        assert!(shared.offline);
+        assert_eq!(shared.since.as_deref(), Some("20260203"));
+        assert!(shared.no_cost);
+    }
+
+    #[test]
     fn applies_schema_backed_report_specific_options() {
         let config = context(
             json!({

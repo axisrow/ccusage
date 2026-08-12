@@ -38,6 +38,8 @@ pub(crate) struct CcusageConfig {
     pub(crate) pi: Option<PiConfig>,
     /// Goose configuration.
     pub(crate) goose: Option<GooseConfig>,
+    /// ZCode configuration.
+    pub(crate) zcode: Option<ZCodeConfig>,
     /// OpenClaw configuration.
     pub(crate) openclaw: Option<OpenClawConfig>,
     /// Kilo configuration.
@@ -209,6 +211,21 @@ pub(crate) struct GooseConfig {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GooseCommandsConfig {
+    pub(crate) daily: Option<SharedOptions>,
+    pub(crate) monthly: Option<SharedOptions>,
+    pub(crate) session: Option<SharedOptions>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ZCodeConfig {
+    pub(crate) defaults: Option<SharedOptions>,
+    pub(crate) commands: Option<ZCodeCommandsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ZCodeCommandsConfig {
     pub(crate) daily: Option<SharedOptions>,
     pub(crate) monthly: Option<SharedOptions>,
     pub(crate) session: Option<SharedOptions>,
@@ -1089,6 +1106,7 @@ mod tests {
         assert!(schema_property(&schema, &["pi", "defaults", "piPath"]).is_some());
         assert!(schema_property(&schema, &["pi", "stores"]).is_some());
         assert!(schema_property(&schema, &["goose", "defaults", "piPath"]).is_none());
+        assert!(schema_property(&schema, &["zcode", "defaults", "piPath"]).is_none());
         assert!(schema_property(&schema, &["openclaw", "defaults", "openClawPath"]).is_some());
         assert!(schema_property(&schema, &["kilo", "defaults", "openClawPath"]).is_none());
         assert!(schema_property(&schema, &["gemini", "defaults", "openClawPath"]).is_none());
@@ -1128,7 +1146,7 @@ mod tests {
             &[
                 "$schema", "amp", "claude", "codebuff", "codex", "commands", "copilot", "defaults",
                 "gemini", "goose", "hermes", "kilo", "kimi", "opencode", "openclaw", "pi", "qwen",
-                "droid",
+                "zcode", "droid",
             ],
         );
         assert!(
@@ -1225,6 +1243,13 @@ mod tests {
                 "commands": {
                     "daily": {
                         "json": true
+                    }
+                }
+            },
+            "zcode": {
+                "commands": {
+                    "daily": {
+                        "offline": true
                     }
                 }
             },

@@ -171,6 +171,7 @@ If ccusage shows no data, check:
    - Hermes Agent: `${HERMES_HOME:-~/.hermes}/state.db`
    - pi-agent: `${PI_AGENT_DIR:-~/.pi/agent/sessions}`
    - Goose: standard Goose data roots or `GOOSE_PATH_ROOT`
+   - ZCode (Z.ai): `${ZCODE_HOME:-~/.zcode}/cli/db/db.sqlite`
    - Kilo: `${KILO_DATA_DIR:-~/.local/share/kilo}`
    - Kimi: `${KIMI_DATA_DIR:-~/.kimi}` (also scans `~/.kimi-code`)
    - OpenClaw: `${OPENCLAW_DIR:-~/.openclaw}` (also scans `~/.clawdbot`, `~/.moltbot`, `~/.moldbot`)
@@ -191,6 +192,7 @@ export CODEBUFF_DATA_DIR="/path/to/manicode"
 export HERMES_HOME="/path/to/hermes"
 export PI_AGENT_DIR="/path/to/pi/sessions"
 export GOOSE_PATH_ROOT="/path/to/goose"
+export ZCODE_HOME="/path/to/zcode"
 export OPENCLAW_DIR="/path/to/openclaw"
 export KILO_DATA_DIR="/path/to/kilo"
 export KIMI_DATA_DIR="/path/to/kimi"
@@ -209,6 +211,7 @@ export CODEBUFF_DATA_DIR="/path/to/manicode,/archive/manicode"
 export HERMES_HOME="/path/to/hermes,/archive/hermes"
 export PI_AGENT_DIR="/path/to/pi/sessions,/archive/pi/sessions"
 export GOOSE_PATH_ROOT="/path/to/goose,/archive/goose"
+export ZCODE_HOME="/path/to/zcode,/archive/zcode"
 export OPENCLAW_DIR="/path/to/openclaw,/archive/openclaw"
 export KILO_DATA_DIR="/path/to/kilo,/archive/kilo"
 export KIMI_DATA_DIR="/path/to/kimi,/archive/kimi"
