@@ -17,7 +17,7 @@ ccusage detects supported data source files from conventional locations by defau
 | `HERMES_HOME`                     | Hermes Agent | `~/.hermes`                        |
 | `PI_AGENT_DIR`                    | pi-agent     | `~/.pi/agent/sessions`             |
 | `GOOSE_PATH_ROOT`                 | Goose        | Standard Goose data roots          |
-| `ZCODE_HOME`                       | ZCode (Z.ai) | `~/.zcode`                         |
+| `ZCODE_HOME`                      | ZCode (Z.ai) | `~/.zcode`                         |
 | `OPENCLAW_DIR`                    | OpenClaw     | `~/.openclaw`                      |
 | `KILO_DATA_DIR`                   | Kilo         | `~/.local/share/kilo`              |
 | `KIMI_DATA_DIR`                   | Kimi         | `~/.kimi`, `~/.kimi-code`          |
