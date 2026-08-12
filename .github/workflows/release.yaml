@@ -9,7 +9,7 @@ concurrency: tagpr
 
 jobs:
   tagpr:
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: write
@@ -36,29 +36,33 @@ jobs:
     name: ${{ matrix.name }}
     needs: tagpr
     if: needs.tagpr.outputs.tag != ''
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && matrix.blacksmith_runner || matrix.fallback_runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: build-linux-arm64
-            os: blacksmith-32vcpu-ubuntu-2404-arm
+            blacksmith_runner: blacksmith-32vcpu-ubuntu-2404-arm
+            fallback_runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             binary: result/bin/ccusage
           - name: build-linux-x64
-            os: blacksmith-32vcpu-ubuntu-2404
+            blacksmith_runner: blacksmith-32vcpu-ubuntu-2404
+            fallback_runner: ubuntu-latest
             platform: linux
             arch: x64
             binary: result/bin/ccusage
           - name: build-mac-arm64
-            os: blacksmith-12vcpu-macos-26
+            blacksmith_runner: blacksmith-12vcpu-macos-26
+            fallback_runner: macos-latest
             platform: darwin
             arch: arm64
             binary: result/bin/ccusage
           - name: build-mac-x64
-            os: blacksmith-12vcpu-macos-26
+            blacksmith_runner: blacksmith-12vcpu-macos-26
+            fallback_runner: macos-latest
             platform: darwin
             arch: x64
             binary: result/bin/ccusage
@@ -68,7 +72,8 @@ jobs:
             arch: arm64
             binary: rust/target/release/ccusage.exe
           - name: build-windows-x64
-            os: blacksmith-32vcpu-windows-2025
+            blacksmith_runner: blacksmith-32vcpu-windows-2025
+            fallback_runner: windows-latest
             platform: win32
             arch: x64
             binary: rust/target/release/ccusage.exe
@@ -140,7 +145,7 @@ jobs:
       - tagpr
       - npm
     if: needs.tagpr.outputs.tag != ''
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
