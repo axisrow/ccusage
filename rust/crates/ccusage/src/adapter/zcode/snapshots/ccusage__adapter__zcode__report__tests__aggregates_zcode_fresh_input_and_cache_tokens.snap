@@ -10,6 +10,16 @@ expression: report
       "cacheReadTokens": 200,
       "date": "2025-01-01",
       "inputTokens": 700,
+      "modelBreakdowns": [
+        {
+          "cacheCreationTokens": 100,
+          "cacheReadTokens": 200,
+          "cost": 0.002378,
+          "inputTokens": 700,
+          "modelName": "GLM-5.2",
+          "outputTokens": 300
+        }
+      ],
       "modelsUsed": [
         "GLM-5.2"
       ],
