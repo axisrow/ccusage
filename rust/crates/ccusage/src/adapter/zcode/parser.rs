@@ -195,6 +195,66 @@ mod tests {
     }
 
     #[test]
+    fn unknown_provider_models_report_zero_cost_without_failing() {
+        let pricing = PricingMap::load_embedded();
+        let model = "custom-zcode-provider-unknown-v1";
+        assert!(
+            model_candidates(model)
+                .iter()
+                .all(|candidate| pricing.find(candidate).is_none())
+        );
+
+        for mode in [CostMode::Auto, CostMode::Calculate] {
+            let loaded = to_loaded_entry(
+                ZCodeEntry {
+                    id: format!("usage-{mode:?}"),
+                    session_id: "session-custom-provider".to_string(),
+                    model: model.to_string(),
+                    timestamp: TimestampMs::from_millis(1_735_689_600_123),
+                    directory: None,
+                    usage: TokenUsageRaw {
+                        input_tokens: 10,
+                        output_tokens: 20,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                        speed: None,
+                        cache_creation: None,
+                    },
+                },
+                None,
+                mode,
+                &pricing,
+            );
+
+            assert_eq!(loaded.cost, 0.0);
+            assert_eq!(loaded.missing_pricing_model.as_deref(), Some(model));
+        }
+
+        let loaded = to_loaded_entry(
+            ZCodeEntry {
+                id: "usage-display".to_string(),
+                session_id: "session-custom-provider".to_string(),
+                model: model.to_string(),
+                timestamp: TimestampMs::from_millis(1_735_689_600_123),
+                directory: None,
+                usage: TokenUsageRaw {
+                    input_tokens: 10,
+                    output_tokens: 20,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    speed: None,
+                    cache_creation: None,
+                },
+            },
+            None,
+            CostMode::Display,
+            &pricing,
+        );
+        assert_eq!(loaded.cost, 0.0);
+        assert_eq!(loaded.missing_pricing_model, None);
+    }
+
+    #[test]
     fn display_mode_reports_zero_when_zcode_has_no_recorded_cost() {
         let pricing = PricingMap::load_embedded();
         let entry = ZCodeEntry {

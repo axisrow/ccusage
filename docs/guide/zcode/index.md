@@ -44,9 +44,11 @@ Cache reads and cache creation are reported separately and priced at the
 cached-input rate. ZCode reasoning tokens are already included in
 `output_tokens`, so they are not counted a second time. ZCode does not store USD
 costs, so `auto` and `calculate`
-use the shared pricing engine; `display` reports zero. GLM-5.2 has an embedded
-fallback price of $1.40 input, $0.26 cached input, and $4.40 output per million
-tokens, so `--offline` works too.
+use the shared pricing engine; `display` reports zero. This applies to all
+`model_id` values, including custom providers: models without pricing data are
+still reported with zero cost. GLM-5.2 has an embedded fallback price of $1.40
+input, $0.26 cached input, and $4.40 output per million tokens, so `--offline`
+works too.
 
 ## Troubleshooting
 
