@@ -254,7 +254,9 @@ jobs:
     needs:
       - changes
       - build-native-packages
-    if: needs.changes.outputs.code-changed == 'true'
+    # pkg-pr-new requires its GitHub App, which forks do not inherit. Forks can
+    # opt in only after installing the app and setting HAS_PKG_PR_NEW=true.
+    if: needs.changes.outputs.code-changed == 'true' && (github.repository == 'ccusage/ccusage' || vars.HAS_PKG_PR_NEW == 'true')
     permissions:
       actions: read
       contents: read
@@ -310,7 +312,7 @@ jobs:
     # Run on PRs and on pushes to the default branch. `push` only fires on main
     # (see on.push.branches), so this validates the published preview package
     # post-merge too, not just on PRs.
-    if: needs.changes.outputs.code-changed == 'true'
+    if: needs.changes.outputs.code-changed == 'true' && (github.repository == 'ccusage/ccusage' || vars.HAS_PKG_PR_NEW == 'true')
     name: e2e ${{ matrix.runner }} (${{ matrix.name }})
     needs:
       - changes
@@ -443,7 +445,7 @@ jobs:
 
   ccusage-perf-comment:
     name: ccusage ${{ matrix.label }}
-    if: github.event_name == 'pull_request' && needs.changes.outputs.code-changed == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code-changed == 'true' && (github.repository == 'ccusage/ccusage' || vars.HAS_PKG_PR_NEW == 'true')
     needs:
       - changes
       - npm-publish-dry-run-and-upload-pkg-pr-now
