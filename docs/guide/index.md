@@ -83,6 +83,7 @@ ccusage reads from local coding CLI data directories:
 | Hermes Agent | `hermes`   | `${HERMES_HOME:-~/.hermes}/state.db`              |
 | pi-agent     | `pi`       | `${PI_AGENT_DIR:-~/.pi/agent/sessions}`           |
 | Goose        | `goose`    | Standard Goose data roots or `GOOSE_PATH_ROOT`    |
+| ZCode (Z.ai) | `zcode`   | `${ZCODE_HOME:-~/.zcode}/cli/db/db.sqlite`        |
 | OpenClaw     | `openclaw` | `${OPENCLAW_DIR:-~/.openclaw}`                    |
 | Kilo         | `kilo`     | `${KILO_DATA_DIR:-~/.local/share/kilo}`           |
 | Kimi         | `kimi`     | `${KIMI_DATA_DIR:-~/.kimi}` (also `~/.kimi-code`) |
