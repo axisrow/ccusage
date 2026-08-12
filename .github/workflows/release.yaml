@@ -67,7 +67,8 @@ jobs:
             arch: x64
             binary: result/bin/ccusage
           - name: build-windows-arm64
-            os: windows-11-arm
+            blacksmith_runner: windows-11-arm
+            fallback_runner: windows-11-arm
             platform: win32
             arch: arm64
             binary: rust/target/release/ccusage.exe
