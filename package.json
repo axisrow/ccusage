@@ -1,6 +1,6 @@
 {
 	"name": "ccusage-monorepo",
-	"version": "20.0.14",
+	"version": "20.0.17",
 	"private": true,
 	"workspaces": [
 		"apps/*",
@@ -14,7 +14,6 @@
 	"dependencies": {},
 	"devDependencies": {
 		"@types/node": "catalog:types",
-		"bumpp": "catalog:release",
 		"changelogithub": "catalog:release",
 		"pkg-pr-new": "catalog:release"
 	},

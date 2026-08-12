@@ -36,8 +36,21 @@ pub(crate) struct Pricing {
     pub(crate) output_above_200k: Option<f64>,
     pub(crate) cache_create_above_200k: Option<f64>,
     pub(crate) cache_read_above_200k: Option<f64>,
+    // Token count above which the `*_above_200k` rates apply. The field names
+    // keep the LiteLLM `_above_200k_tokens` suffix for JSON compatibility, but
+    // some providers switch tiers at a different point (OpenAI long-context
+    // pricing starts above 272K input tokens), so the threshold is per model.
+    pub(crate) long_context_threshold: Option<u64>,
     pub(crate) fast_multiplier: f64,
 }
+
+/// Default tier boundary for LiteLLM `*_above_200k_tokens` pricing fields.
+pub(crate) const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
+
+/// OpenAI long-context pricing boundary: requests with more than 272K input
+/// tokens (GPT-5's maximum short-context input size) are billed at
+/// long-context rates.
+pub(crate) const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
 
 impl Pricing {
     pub(crate) const fn empty() -> Self {
@@ -51,17 +64,31 @@ impl Pricing {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PricingMap {
     entries: FxHashMap<String, Pricing>,
     context_limits: FxHashMap<String, u64>,
     enable_models_dev_fallback: bool,
     enable_embedded_models_dev_fallback: bool,
+    find_cache: OnceLock<Mutex<FxHashMap<String, Option<Pricing>>>>,
+}
+
+impl Default for PricingMap {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            context_limits: FxHashMap::default(),
+            enable_models_dev_fallback: false,
+            enable_embedded_models_dev_fallback: false,
+            find_cache: OnceLock::new(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,6 +230,7 @@ impl PricingMap {
         let fast_multiplier_overrides = FastMultiplierOverrides::load();
         map.load_json_with_overrides(BUILD_TIME_PRICING_JSON, &fast_multiplier_overrides);
         map.put_builtin_pricing(&fast_multiplier_overrides);
+        map.apply_builtin_long_context_rates();
         // Resolve models that LiteLLM and the built-in table miss from the
         // embedded models.dev snapshot. This works offline, unlike the network
         // source gated by `enable_models_dev_fallback`.
@@ -239,6 +267,10 @@ impl PricingMap {
             }
         }
 
+        // A live LiteLLM refresh replaces whole entries, so re-apply the
+        // built-in long-context rates it does not publish before user
+        // overrides get the final word.
+        map.apply_builtin_long_context_rates();
         map.enable_models_dev_fallback = !offline;
         map.apply_overrides(overrides);
         map
@@ -290,6 +322,7 @@ impl PricingMap {
                     cache_create_above_200k: pricing
                         .cache_creation_input_token_cost_above_200k_tokens,
                     cache_read_above_200k: pricing.cache_read_input_token_cost_above_200k_tokens,
+                    long_context_threshold: None,
                     fast_multiplier,
                 },
             );
@@ -298,6 +331,7 @@ impl PricingMap {
             }
             loaded_count += 1;
         }
+        self.clear_find_cache();
         loaded_count
     }
 
@@ -349,6 +383,7 @@ impl PricingMap {
                     output_above_200k: None,
                     cache_create_above_200k: None,
                     cache_read_above_200k: None,
+                    long_context_threshold: None,
                     fast_multiplier: 1.0,
                 },
             );
@@ -357,13 +392,30 @@ impl PricingMap {
             }
             loaded_count += 1;
         }
+        self.clear_find_cache();
         loaded_count
     }
 
     pub(crate) fn find(&self, model: &str) -> Option<Pricing> {
+        // Fast path: check the model-level cache first. When the same model
+        // name is looked up repeatedly (e.g. across thousands of entries with
+        // only a few dozen unique models), the cache avoids re-running the
+        // expensive fuzzy fallback on every call.
+        {
+            let cache = self
+                .find_cache
+                .get_or_init(|| Mutex::new(FxHashMap::default()));
+            let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(&cached) = guard.get(model) {
+                return cached;
+            }
+        }
+        // Full lookup (dropped the lock above so concurrent callers are not
+        // serialized on the expensive fuzzy path).
         let alias = crate::model_aliases::resolve_model_name(model);
         let resolved_alias = alias.as_ref();
-        self.find_entry_or_alias(model)
+        let result = self
+            .find_entry_or_alias(model)
             .or_else(|| {
                 (resolved_alias != model)
                     .then(|| self.find_entry_or_alias(resolved_alias))
@@ -384,7 +436,20 @@ impl PricingMap {
                 self.enable_embedded_models_dev_fallback
                     .then(|| embedded_models_dev_pricing().find_entry_or_alias(resolved_alias))
                     .flatten()
-            })
+            });
+        // Store the result (including None for misses) so repeated lookups
+        // for the same model that fails to match any pricing entry are also
+        // short-circuited.
+        let cache = self
+            .find_cache
+            .get_or_init(|| Mutex::new(FxHashMap::default()));
+        let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+        guard.insert(model.to_string(), result);
+        result
+    }
+
+    pub(crate) fn find_exact(&self, model: &str) -> Option<Pricing> {
+        self.entries.get(model).copied()
     }
 
     fn find_entry_or_alias(&self, model: &str) -> Option<Pricing> {
@@ -461,6 +526,7 @@ impl PricingMap {
         for (model, override_value) in overrides {
             self.apply_override(model, override_value);
         }
+        self.clear_find_cache();
     }
 
     fn apply_override(&mut self, model: &str, override_value: &PricingOverride) {
@@ -540,6 +606,7 @@ impl PricingMap {
                 .or(base.output_above_200k),
             cache_create_above_200k,
             cache_read_above_200k,
+            long_context_threshold: base.long_context_threshold,
             fast_multiplier: override_value
                 .fast_multiplier
                 .unwrap_or(base.fast_multiplier),
@@ -551,6 +618,13 @@ impl PricingMap {
         }
     }
 
+    fn clear_find_cache(&self) {
+        if let Some(cache) = self.find_cache.get() {
+            let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+            guard.clear();
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
@@ -559,6 +633,35 @@ impl PricingMap {
     #[cfg(test)]
     fn models_dev_fallback_enabled(&self) -> bool {
         self.enable_models_dev_fallback
+    }
+
+    /// Fills in long-context tier rates for models whose upstream pricing
+    /// entries only carry the flat rates. Runs after every pricing load
+    /// (embedded and live) because LiteLLM refreshes replace whole entries.
+    /// Entries that already carry any tier rate are left untouched so
+    /// upstream data wins once it exists. The check is deliberately
+    /// all-or-nothing rather than per field: upstream `*_above_200k_tokens`
+    /// values assume the 200K boundary, so mixing them with built-in rates
+    /// that assume the OpenAI 272K boundary would price both tiers wrong.
+    fn apply_builtin_long_context_rates(&mut self) {
+        for (model, pricing) in &mut self.entries {
+            if pricing.input_above_200k.is_some()
+                || pricing.output_above_200k.is_some()
+                || pricing.cache_create_above_200k.is_some()
+                || pricing.cache_read_above_200k.is_some()
+            {
+                continue;
+            }
+            let Some(rates) = builtin_long_context_rates(model_without_date_suffix(model)) else {
+                continue;
+            };
+            pricing.input_above_200k = rates.input;
+            pricing.output_above_200k = rates.output;
+            pricing.cache_create_above_200k = rates.cache_create;
+            pricing.cache_read_above_200k = rates.cache_read;
+            pricing.long_context_threshold = Some(rates.threshold);
+        }
+        self.clear_find_cache();
     }
 
     fn put_builtin_pricing(&mut self, fast_multiplier_overrides: &FastMultiplierOverrides) {
@@ -574,6 +677,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -589,6 +693,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: fast_multiplier_overrides
                     .multiplier_for("claude-opus-4-6")
                     .unwrap_or(1.0),
@@ -606,6 +711,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: fast_multiplier_overrides
                     .multiplier_for("claude-opus-4-7")
                     .unwrap_or(1.0),
@@ -623,6 +729,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: fast_multiplier_overrides
                     .multiplier_for("claude-opus-4-8")
                     .unwrap_or(1.0),
@@ -640,6 +747,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -655,6 +763,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -670,6 +779,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -685,6 +795,7 @@ impl PricingMap {
                 output_above_200k: Some(22.5e-6),
                 cache_create_above_200k: Some(7.5e-6),
                 cache_read_above_200k: Some(0.6e-6),
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -698,6 +809,7 @@ impl PricingMap {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         };
         self.entries
@@ -716,6 +828,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -731,6 +844,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -746,6 +860,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -761,6 +876,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -776,6 +892,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: fast_multiplier_overrides
                     .multiplier_for("gpt-5.5")
                     .unwrap_or(1.0),
@@ -793,6 +910,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -809,6 +927,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -825,6 +944,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -838,6 +958,7 @@ impl PricingMap {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         };
         self.entries.insert("gpt-5.1".to_string(), gpt_5_1_pricing);
@@ -853,6 +974,7 @@ impl PricingMap {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         };
         self.entries
@@ -880,6 +1002,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: fast_multiplier_overrides
                     .multiplier_for("gpt-5.4")
                     .unwrap_or(1.0),
@@ -897,6 +1020,7 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -912,9 +1036,37 @@ impl PricingMap {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
+        // Source: https://platform.openai.com/docs/pricing (Standard tier,
+        // short context). The long-context tier rates live in
+        // `builtin_long_context_rates`, which runs after every pricing load.
+        for (model, input, output, cache_create, cache_read) in [
+            ("gpt-5.6-sol", 5e-6, 30e-6, 6.25e-6, 0.5e-6),
+            ("gpt-5.6-terra", 2.5e-6, 15e-6, 3.125e-6, 0.25e-6),
+            ("gpt-5.6-luna", 1e-6, 6e-6, 1.25e-6, 0.1e-6),
+        ] {
+            self.entries.insert(
+                model.to_string(),
+                Pricing {
+                    input,
+                    output,
+                    cache_create,
+                    cache_read,
+                    cache_read_explicit: true,
+                    input_above_200k: None,
+                    output_above_200k: None,
+                    cache_create_above_200k: None,
+                    cache_read_above_200k: None,
+                    long_context_threshold: None,
+                    fast_multiplier: fast_multiplier_overrides
+                        .multiplier_for(model)
+                        .unwrap_or(1.0),
+                },
+            );
+        }
         // Source: https://docs.z.ai/guides/overview/pricing
         let glm_pricing = |input: f64, output: f64, cache_read: f64| Pricing {
             input,
@@ -926,6 +1078,7 @@ impl PricingMap {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         };
         let glm_base = glm_pricing(0.6e-6, 2.2e-6, 0.11e-6);
@@ -986,6 +1139,11 @@ impl PricingMap {
         self.context_limits
             .insert("grok-4.3".to_string(), 1_000_000);
         self.context_limits.insert("gpt-5.4".to_string(), 1_050_000);
+        // The gpt-5.6 family shares the 1,050,000-token window of the other
+        // long-context GPT-5 flagship models until upstream data lands.
+        for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+            self.context_limits.insert(model.to_string(), 1_050_000);
+        }
         for model in [
             "claude-opus-4-8",
             "claude-opus-4-7",
@@ -1148,6 +1306,85 @@ fn normalized_pricing_key(value: &str) -> Cow<'_, str> {
     }
 }
 
+/// Long-context tier rates (per token) for a base model, applied on top of
+/// loaded pricing entries by `apply_builtin_long_context_rates`.
+#[derive(Clone, Copy)]
+struct LongContextRates {
+    threshold: u64,
+    input: Option<f64>,
+    output: Option<f64>,
+    cache_create: Option<f64>,
+    cache_read: Option<f64>,
+}
+
+/// Built-in two-stage rates that upstream pricing sources do not publish.
+/// Source: https://platform.openai.com/docs/pricing (Standard tier); OpenAI
+/// bills requests with more than 272K input tokens at long-context rates.
+fn builtin_long_context_rates(base_model: &str) -> Option<LongContextRates> {
+    let openai = |input: f64, output: f64, cache_create: Option<f64>, cache_read: Option<f64>| {
+        LongContextRates {
+            threshold: OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS,
+            input: Some(input),
+            output: Some(output),
+            cache_create,
+            cache_read,
+        }
+    };
+    match base_model {
+        "gpt-5.6-sol" => Some(openai(10e-6, 45e-6, Some(12.5e-6), Some(1e-6))),
+        "gpt-5.6-terra" => Some(openai(5e-6, 22.5e-6, Some(6.25e-6), Some(0.5e-6))),
+        "gpt-5.6-luna" => Some(openai(2e-6, 9e-6, Some(2.5e-6), Some(0.2e-6))),
+        // gpt-5.5 and gpt-5.4 have no separate cache-write price, so cache
+        // writes are billed as regular input in both tiers.
+        "gpt-5.5" => Some(openai(10e-6, 45e-6, Some(10e-6), Some(1e-6))),
+        "gpt-5.4" => Some(openai(5e-6, 22.5e-6, Some(5e-6), Some(0.5e-6))),
+        // The pro models have no prompt-caching prices, so only the input and
+        // output rates change in the long-context tier.
+        "gpt-5.5-pro" | "gpt-5.4-pro" => Some(openai(60e-6, 270e-6, None, None)),
+        _ => None,
+    }
+}
+
+/// Input-token boundary above which a request is billed at a model's
+/// long-context tier. Codex aggregates per-model token sums before pricing is
+/// applied, so each request's tier must be decided during aggregation from the
+/// model's own threshold rather than a single global constant. This returns the
+/// same value `apply_builtin_long_context_rates` stamps onto
+/// `Pricing::long_context_threshold`, and falls back to the default 200K
+/// boundary used for LiteLLM `*_above_200k_tokens` data.
+pub(crate) fn long_context_split_threshold(model: &str) -> u64 {
+    builtin_long_context_rates(model_without_date_suffix(model))
+        .map(|rates| rates.threshold)
+        .unwrap_or(DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS)
+}
+
+/// Strips a trailing release-date suffix (`-YYYY-MM-DD` or `-YYYYMMDD`) so
+/// date-pinned pricing keys share their base model's long-context rates.
+fn model_without_date_suffix(model: &str) -> &str {
+    let bytes = model.as_bytes();
+    // -YYYY-MM-DD (OpenAI style, e.g. gpt-5.5-2026-04-23)
+    if model.len() > 11 {
+        let suffix = &bytes[model.len() - 11..];
+        if suffix[0] == b'-'
+            && suffix[1..5].iter().all(u8::is_ascii_digit)
+            && suffix[5] == b'-'
+            && suffix[6..8].iter().all(u8::is_ascii_digit)
+            && suffix[8] == b'-'
+            && suffix[9..].iter().all(u8::is_ascii_digit)
+        {
+            return &model[..model.len() - 11];
+        }
+    }
+    // -YYYYMMDD (Anthropic style, e.g. claude-3-5-haiku-20241022)
+    if model.len() > 9 {
+        let suffix = &bytes[model.len() - 9..];
+        if suffix[0] == b'-' && suffix[1..].iter().all(u8::is_ascii_digit) {
+            return &model[..model.len() - 9];
+        }
+    }
+    model
+}
+
 /// Maps Codex log labels that upstream pricing sources do not publish to
 /// canonical pricing keys.
 fn pricing_alias(model: &str) -> Option<&'static str> {
@@ -1250,7 +1487,7 @@ fn fetch_json_url(url: &str) -> std::io::Result<String> {
 mod tests {
     use super::{
         BUILD_TIME_MODELS_DEV_JSON, BUILD_TIME_PRICING_JSON, Pricing, PricingMap,
-        embedded_models_dev_pricing,
+        embedded_models_dev_pricing, long_context_split_threshold, model_without_date_suffix,
     };
     use ccusage_test_support::fs_fixture;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1806,6 +2043,130 @@ mod tests {
     }
 
     #[test]
+    fn embedded_pricing_includes_gpt_5_6_family_with_long_context_rates() {
+        let pricing = PricingMap::load_embedded();
+
+        let sol = pricing.find("gpt-5.6-sol").unwrap();
+        assert_eq!(sol.input, 5e-6);
+        assert_eq!(sol.output, 30e-6);
+        assert_eq!(sol.cache_create, 6.25e-6);
+        assert_eq!(sol.cache_read, 0.5e-6);
+        assert!(sol.cache_read_explicit);
+        assert_eq!(sol.input_above_200k, Some(10e-6));
+        assert_eq!(sol.output_above_200k, Some(45e-6));
+        assert_eq!(sol.cache_create_above_200k, Some(12.5e-6));
+        assert_eq!(sol.cache_read_above_200k, Some(1e-6));
+        assert_eq!(sol.long_context_threshold, Some(272_000));
+        assert_eq!(pricing.context_limit("gpt-5.6-sol"), Some(1_050_000));
+
+        let terra = pricing.find("gpt-5.6-terra").unwrap();
+        assert_eq!(terra.input, 2.5e-6);
+        assert_eq!(terra.cache_create, 3.125e-6);
+        assert_eq!(terra.input_above_200k, Some(5e-6));
+        assert_eq!(terra.output_above_200k, Some(22.5e-6));
+
+        let luna = pricing.find("gpt-5.6-luna").unwrap();
+        assert_eq!(luna.input, 1e-6);
+        assert_eq!(luna.output, 6e-6);
+        assert_eq!(luna.input_above_200k, Some(2e-6));
+        assert_eq!(luna.output_above_200k, Some(9e-6));
+    }
+
+    #[test]
+    fn embedded_pricing_fills_gpt_long_context_tier_rates() {
+        let pricing = PricingMap::load_embedded();
+
+        let gpt_55 = pricing.find("gpt-5.5").unwrap();
+        assert_eq!(gpt_55.input_above_200k, Some(10e-6));
+        assert_eq!(gpt_55.output_above_200k, Some(45e-6));
+        assert_eq!(gpt_55.cache_read_above_200k, Some(1e-6));
+        assert_eq!(gpt_55.long_context_threshold, Some(272_000));
+
+        let gpt_54 = pricing.find("gpt-5.4").unwrap();
+        assert_eq!(gpt_54.input_above_200k, Some(5e-6));
+        assert_eq!(gpt_54.output_above_200k, Some(22.5e-6));
+        assert_eq!(gpt_54.long_context_threshold, Some(272_000));
+
+        // Models the pricing page lists without a long-context tier stay flat.
+        let mini = pricing.find("gpt-5.4-mini").unwrap();
+        assert_eq!(mini.input_above_200k, None);
+        assert_eq!(mini.long_context_threshold, None);
+    }
+
+    #[test]
+    fn long_context_overlay_survives_litellm_refresh_and_defers_to_upstream() {
+        let mut pricing = PricingMap::load_embedded();
+        // A live LiteLLM refresh replaces whole entries with flat rates and
+        // may add date-pinned keys.
+        pricing.load_json(
+            r#"{
+                "gpt-5.5": {
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.000031
+                },
+                "gpt-5.5-2026-04-23": {
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.000031
+                }
+            }"#,
+        );
+        pricing.apply_builtin_long_context_rates();
+
+        let gpt_55 = pricing.find("gpt-5.5").unwrap();
+        assert_eq!(gpt_55.input, 6e-6);
+        assert_eq!(gpt_55.input_above_200k, Some(10e-6));
+        assert_eq!(gpt_55.long_context_threshold, Some(272_000));
+        // Date-pinned keys share the base model's long-context rates.
+        let dated = pricing.find_exact("gpt-5.5-2026-04-23").unwrap();
+        assert_eq!(dated.input_above_200k, Some(10e-6));
+
+        // Tier rates published upstream win over the built-in overlay.
+        pricing.load_json(
+            r#"{
+                "gpt-5.5": {
+                    "input_cost_per_token": 0.000006,
+                    "output_cost_per_token": 0.000031,
+                    "input_cost_per_token_above_200k_tokens": 0.000012
+                }
+            }"#,
+        );
+        pricing.apply_builtin_long_context_rates();
+
+        let gpt_55 = pricing.find("gpt-5.5").unwrap();
+        assert_eq!(gpt_55.input_above_200k, Some(12e-6));
+        assert_eq!(gpt_55.long_context_threshold, None);
+    }
+
+    #[test]
+    fn long_context_split_threshold_is_per_model() {
+        // OpenAI two-stage models switch tiers above 272K input tokens.
+        assert_eq!(long_context_split_threshold("gpt-5.6-sol"), 272_000);
+        assert_eq!(long_context_split_threshold("gpt-5.5"), 272_000);
+        assert_eq!(long_context_split_threshold("gpt-5.5-pro"), 272_000);
+        // Date-pinned keys share their base model's boundary.
+        assert_eq!(long_context_split_threshold("gpt-5.5-2026-04-23"), 272_000);
+        // Models without a built-in tier fall back to the 200K default used for
+        // LiteLLM `*_above_200k_tokens` data.
+        assert_eq!(long_context_split_threshold("gpt-5"), 200_000);
+        assert_eq!(long_context_split_threshold("gpt-5.4-mini"), 200_000);
+    }
+
+    #[test]
+    fn strips_model_date_suffixes() {
+        assert_eq!(model_without_date_suffix("gpt-5.5-2026-04-23"), "gpt-5.5");
+        assert_eq!(
+            model_without_date_suffix("gpt-5.5-pro-2026-04-23"),
+            "gpt-5.5-pro"
+        );
+        assert_eq!(
+            model_without_date_suffix("claude-3-5-haiku-20241022"),
+            "claude-3-5-haiku"
+        );
+        assert_eq!(model_without_date_suffix("gpt-5.6-sol"), "gpt-5.6-sol");
+        assert_eq!(model_without_date_suffix("gpt-4-0613"), "gpt-4-0613");
+    }
+
+    #[test]
     fn pricing_lookup_resolves_model_aliases() {
         let _aliases =
             crate::model_aliases::set_model_aliases_for_tests([("private-gpt-55", "gpt-5.5")]);
@@ -1963,6 +2324,7 @@ mod tests {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -1978,6 +2340,7 @@ mod tests {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -2000,6 +2363,7 @@ mod tests {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -2139,6 +2503,7 @@ mod tests {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -2154,6 +2519,7 @@ mod tests {
                 output_above_200k: None,
                 cache_create_above_200k: None,
                 cache_read_above_200k: None,
+                long_context_threshold: None,
                 fast_multiplier: 1.0,
             },
         );
@@ -2220,6 +2586,7 @@ mod tests {
                     output_above_200k: None,
                     cache_create_above_200k: None,
                     cache_read_above_200k: None,
+                    long_context_threshold: None,
                     fast_multiplier: 1.5,
                 },
             );
@@ -2304,6 +2671,7 @@ mod tests {
                     output_above_200k: None,
                     cache_create_above_200k: Some(4.6875e-6),
                     cache_read_above_200k: Some(3.75e-7),
+                    long_context_threshold: None,
                     fast_multiplier: 1.0,
                 },
             );
@@ -2342,6 +2710,7 @@ mod tests {
                     output_above_200k: None,
                     cache_create_above_200k: None,
                     cache_read_above_200k: None,
+                    long_context_threshold: None,
                     fast_multiplier: 1.0,
                 },
             );
@@ -2372,6 +2741,7 @@ mod tests {
                     output_above_200k: None,
                     cache_create_above_200k: None,
                     cache_read_above_200k: None,
+                    long_context_threshold: None,
                     fast_multiplier: 1.0,
                 },
             );

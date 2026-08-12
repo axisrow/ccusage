@@ -36,7 +36,7 @@ test-node:
 
 # Generate a large benchmark fixture for PR performance comparisons
 generate-large-fixture output_dir codex_output_dir size_mib="1024":
-    apps/ccusage/scripts/generate-large-fixture.nu --output-dir "{{output_dir}}" --codex-output-dir "{{codex_output_dir}}" --size-mib {{size_mib}}
+    apps/ccusage/scripts/generate-large-fixture.ts --output-dir "{{output_dir}}" --codex-output-dir "{{codex_output_dir}}" --size-mib {{size_mib}}
 
 # Format the whole tree (Nix, Rust, JS/TS, workflows, typos) via treefmt
 fmt:
@@ -68,8 +68,3 @@ update-models-dev-pricing:
     nix flake update models-dev
     just gen-models-dev-pricing
     just check
-
-# Bump every package version (Rust included via bump.config.ts), then commit, tag, push
-release: ccusage::typecheck ccusage::build
-    pnpm bumpp -r
-    git checkout -- $(git ls-files '*package.json')

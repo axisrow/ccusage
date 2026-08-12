@@ -335,6 +335,16 @@ fn accumulate_codex_event_into_group(
     model_usage.output_tokens += event.output_tokens;
     model_usage.reasoning_output_tokens += event.reasoning_output_tokens;
     model_usage.total_tokens += event.total_tokens;
+    // Each event is one request, so its input size decides the pricing tier
+    // here; the summed totals cannot recover per-request context sizes. The
+    // boundary is per model (OpenAI's 272K models and any future tier with a
+    // different threshold) rather than a single global constant, matching the
+    // threshold used to price the long-context buckets.
+    if event.input_tokens > crate::pricing::long_context_split_threshold(model) {
+        model_usage.long_context_input_tokens += event.input_tokens;
+        model_usage.long_context_cached_input_tokens += event.cached_input_tokens;
+        model_usage.long_context_output_tokens += event.output_tokens;
+    }
     model_usage.is_fallback |= event.is_fallback_model;
 }
 
@@ -415,6 +425,9 @@ fn merge_groups(target: &mut BTreeMap<String, CodexGroup>, source: BTreeMap<Stri
             target_usage.output_tokens += usage.output_tokens;
             target_usage.reasoning_output_tokens += usage.reasoning_output_tokens;
             target_usage.total_tokens += usage.total_tokens;
+            target_usage.long_context_input_tokens += usage.long_context_input_tokens;
+            target_usage.long_context_cached_input_tokens += usage.long_context_cached_input_tokens;
+            target_usage.long_context_output_tokens += usage.long_context_output_tokens;
             target_usage.is_fallback |= usage.is_fallback;
         }
     }
@@ -529,6 +542,53 @@ mod tests {
             assert_eq!(group.reasoning_output_tokens, 20);
             assert_eq!(group.total_tokens, 1_200);
         }
+    }
+
+    #[test]
+    fn tracks_long_context_token_split_per_request() {
+        let usage_line = |input: u64, cached: u64, output: u64| {
+            json!({
+                "timestamp": "2026-07-09T08:01:00.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model": "gpt-5.6-sol",
+                        "last_token_usage": {
+                            "input_tokens": input,
+                            "cached_input_tokens": cached,
+                            "output_tokens": output,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": input + output,
+                        },
+                    },
+                },
+            })
+            .to_string()
+        };
+        // One request above the 272K input threshold and one below it.
+        let long_line = usage_line(280_000, 20_000, 500);
+        let short_line = usage_line(100_000, 50_000, 300);
+        let fixture = fs_fixture!({
+            "sessions/root.jsonl": &format!("{long_line}\n{short_line}"),
+        });
+        let shared = SharedArgs {
+            timezone: Some("UTC".to_string()),
+            ..SharedArgs::default()
+        };
+
+        let groups =
+            load_groups_from_directory(&fixture.path("sessions"), &shared, AgentReportKind::Daily)
+                .unwrap();
+
+        let group = groups.get("2026-07-09").unwrap();
+        let usage = group.models.get("gpt-5.6-sol").unwrap();
+        assert_eq!(usage.input_tokens, 380_000);
+        assert_eq!(usage.cached_input_tokens, 70_000);
+        assert_eq!(usage.output_tokens, 800);
+        assert_eq!(usage.long_context_input_tokens, 280_000);
+        assert_eq!(usage.long_context_cached_input_tokens, 20_000);
+        assert_eq!(usage.long_context_output_tokens, 500);
     }
 
     #[test]

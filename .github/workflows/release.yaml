@@ -1,46 +1,80 @@
-name: npm publish
+name: tagpr
 
 on:
   push:
-    tags:
-      - '*'
+    branches:
+      - main
+
+concurrency: tagpr
 
 jobs:
+  tagpr:
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    outputs:
+      tag: ${{ steps.tagpr.outputs.tag }}
+    steps:
+      # persist-credentials stays on (default) so tagpr can push the release PR and tag
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - id: tagpr
+        uses: Songmu/tagpr@e84001bd5dac8defa0c75b3913937d284a3b3660 # v1.20.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The release jobs below run in this workflow instead of a tag-triggered one
+  # because tags pushed with GITHUB_TOKEN do not trigger `on: push: tags`
+  # workflows. They run only when tagpr just tagged a release-PR merge, and
+  # check out that tag explicitly. To retry a failed release, re-run only the
+  # failed jobs: a full re-run finds no new tag and skips everything.
   build-native-packages:
     name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    needs: tagpr
+    if: needs.tagpr.outputs.tag != ''
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && matrix.blacksmith_runner || matrix.fallback_runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: build-linux-arm64
-            os: blacksmith-32vcpu-ubuntu-2404-arm
+            blacksmith_runner: blacksmith-32vcpu-ubuntu-2404-arm
+            fallback_runner: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             binary: result/bin/ccusage
           - name: build-linux-x64
-            os: blacksmith-32vcpu-ubuntu-2404
+            blacksmith_runner: blacksmith-32vcpu-ubuntu-2404
+            fallback_runner: ubuntu-latest
             platform: linux
             arch: x64
             binary: result/bin/ccusage
           - name: build-mac-arm64
-            os: blacksmith-12vcpu-macos-26
+            blacksmith_runner: blacksmith-12vcpu-macos-26
+            fallback_runner: macos-latest
             platform: darwin
             arch: arm64
             binary: result/bin/ccusage
           - name: build-mac-x64
-            os: blacksmith-12vcpu-macos-26
+            blacksmith_runner: blacksmith-12vcpu-macos-26
+            fallback_runner: macos-latest
             platform: darwin
             arch: x64
             binary: result/bin/ccusage
           - name: build-windows-arm64
-            os: windows-11-arm
+            blacksmith_runner: windows-11-arm
+            fallback_runner: windows-11-arm
             platform: win32
             arch: arm64
             binary: rust/target/release/ccusage.exe
           - name: build-windows-x64
-            os: blacksmith-32vcpu-windows-2025
+            blacksmith_runner: blacksmith-32vcpu-windows-2025
+            fallback_runner: windows-latest
             platform: win32
             arch: x64
             binary: rust/target/release/ccusage.exe
@@ -48,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ needs.tagpr.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/build-linux-native-package
@@ -70,7 +105,9 @@ jobs:
 
   npm:
     needs:
+      - tagpr
       - build-native-packages
+    if: needs.tagpr.outputs.tag != ''
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
@@ -79,6 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ needs.tagpr.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-nix-cache
@@ -105,13 +143,18 @@ jobs:
 
   release:
     needs:
+      - tagpr
       - npm
-    runs-on: blacksmith-32vcpu-ubuntu-2404-arm
+    if: needs.tagpr.outputs.tag != ''
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
+      # changelogithub resolves the release tag with `git tag --points-at HEAD`,
+      # so checking out the tag is what makes it pick the right release
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ needs.tagpr.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-nix-cache

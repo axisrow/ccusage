@@ -9,7 +9,7 @@ permissions: {}
 
 jobs:
   update-pricing:
-    runs-on: blacksmith-32vcpu-ubuntu-2404-arm
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
@@ -79,7 +79,7 @@ jobs:
   update-models-dev-pricing:
     needs: update-pricing
     if: ${{ always() }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404-arm
+    runs-on: ${{ (github.repository == 'ccusage/ccusage' || vars.HAS_BLACKSMITH == 'true') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write

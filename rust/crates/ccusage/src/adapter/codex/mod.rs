@@ -222,12 +222,107 @@ mod tests {
             output_tokens: 5,
             reasoning_output_tokens: 0,
             total_tokens: 105,
-            is_fallback: false,
+            ..CodexModelUsage::default()
         };
 
         let cost = calculate_codex_model_cost("gpt-test", &usage, &pricing, CodexSpeed::Standard);
 
         assert!((cost - 0.00015).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn bills_long_context_codex_requests_at_long_context_rates() {
+        let mut pricing = PricingMap::default();
+        pricing.load_json(
+            r#"{
+                "gpt-long": {
+                    "input_cost_per_token": 0.000005,
+                    "output_cost_per_token": 0.00003,
+                    "cache_read_input_token_cost": 0.0000005,
+                    "input_cost_per_token_above_200k_tokens": 0.00001,
+                    "output_cost_per_token_above_200k_tokens": 0.000045,
+                    "cache_read_input_token_cost_above_200k_tokens": 0.000001
+                }
+            }"#,
+        );
+        let usage = CodexModelUsage {
+            input_tokens: 350_000,
+            cached_input_tokens: 50_000,
+            output_tokens: 1_000,
+            total_tokens: 351_000,
+            long_context_input_tokens: 300_000,
+            long_context_cached_input_tokens: 40_000,
+            long_context_output_tokens: 800,
+            ..CodexModelUsage::default()
+        };
+
+        let cost = calculate_codex_model_cost("gpt-long", &usage, &pricing, CodexSpeed::Standard);
+
+        // Short bucket: 40K non-cached input, 10K cached, 200 output tokens.
+        // Long bucket: 260K non-cached input, 40K cached, 800 output tokens.
+        let expected = 40_000.0 * 5e-6
+            + 10_000.0 * 0.5e-6
+            + 200.0 * 30e-6
+            + 260_000.0 * 10e-6
+            + 40_000.0 * 1e-6
+            + 800.0 * 45e-6;
+        assert!((cost - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn long_context_split_without_tier_rates_matches_flat_pricing() {
+        let mut pricing = PricingMap::default();
+        pricing.load_json(
+            r#"{
+                "gpt-test": {
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.00001
+                }
+            }"#,
+        );
+        let flat = CodexModelUsage {
+            input_tokens: 400_000,
+            cached_input_tokens: 100_000,
+            output_tokens: 2_000,
+            total_tokens: 402_000,
+            ..CodexModelUsage::default()
+        };
+        let split = CodexModelUsage {
+            long_context_input_tokens: 300_000,
+            long_context_cached_input_tokens: 80_000,
+            long_context_output_tokens: 1_500,
+            ..flat.clone()
+        };
+
+        let flat_cost =
+            calculate_codex_model_cost("gpt-test", &flat, &pricing, CodexSpeed::Standard);
+        let split_cost =
+            calculate_codex_model_cost("gpt-test", &split, &pricing, CodexSpeed::Standard);
+
+        assert!((flat_cost - split_cost).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn prices_gpt_5_6_long_context_usage_from_embedded_pricing() {
+        let pricing = PricingMap::load_embedded();
+        let usage = CodexModelUsage {
+            input_tokens: 300_000,
+            cached_input_tokens: 100_000,
+            output_tokens: 1_000,
+            total_tokens: 301_000,
+            long_context_input_tokens: 300_000,
+            long_context_cached_input_tokens: 100_000,
+            long_context_output_tokens: 1_000,
+            ..CodexModelUsage::default()
+        };
+
+        let cost =
+            calculate_codex_model_cost("gpt-5.6-sol", &usage, &pricing, CodexSpeed::Standard);
+
+        // The whole request is billed at long-context rates: 200K non-cached
+        // input at $10/M, 100K cached at $1/M, 1K output at $45/M.
+        let expected = 200_000.0 * 10e-6 + 100_000.0 * 1e-6 + 1_000.0 * 45e-6;
+        assert!((cost - expected).abs() < 1e-9);
     }
 
     #[test]
@@ -248,7 +343,7 @@ mod tests {
             output_tokens: 5,
             reasoning_output_tokens: 0,
             total_tokens: 105,
-            is_fallback: false,
+            ..CodexModelUsage::default()
         };
 
         let standard =
