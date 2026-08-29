@@ -422,6 +422,57 @@ mod tests {
     }
 
     #[test]
+    fn resets_originator_when_a_later_session_meta_omits_it() {
+        let fixture = fs_fixture!({
+            "2026-01-02T00-00-00-resumed.jsonl": [
+                json!({
+                    "timestamp": "2026-01-02T00:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "cwd": "/home/user/project",
+                        "originator": "codex_vscode",
+                        "cli_version": "0.42.0",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "timestamp": "2026-01-02T00:01:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "parent-xyz",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "timestamp": "2026-01-02T00:02:00.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "model": "gpt-5",
+                            "last_token_usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 10,
+                                "output_tokens": 50,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 150,
+                            },
+                        },
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("Uncategorized"));
+    }
+
+    #[test]
     fn marks_headless_codex_exec_usage_as_exec_source() {
         let fixture = fs_fixture!({
             "run.jsonl": [
@@ -445,6 +496,43 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].source.as_deref(), Some("Exec"));
+    }
+
+    #[test]
+    fn headless_usage_after_session_meta_inherits_parsed_originator() {
+        let fixture = fs_fixture!({
+            "run.jsonl": [
+                json!({
+                    "timestamp": "2026-01-02T00:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "cwd": "/home/user/project",
+                        "originator": "codex_vscode",
+                        "cli_version": "0.42.0",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "type": "turn.completed",
+                    "timestamp": "2026-01-02T03:04:05.000Z",
+                    "model": "gpt-5.2-codex",
+                    "usage": {
+                        "input_tokens": 120,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 30,
+                        "total_tokens": 150,
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("VS Code"));
     }
 
     #[test]
