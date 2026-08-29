@@ -148,6 +148,7 @@ pub(crate) struct CodexTokenUsageEvent {
     pub(crate) reasoning_output_tokens: u64,
     pub(crate) total_tokens: u64,
     pub(crate) is_fallback_model: bool,
+    pub(crate) source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

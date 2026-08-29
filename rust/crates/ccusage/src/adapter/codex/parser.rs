@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::{CodexRawUsage, CodexTokenUsageEvent, Result, TimestampMs};
 
+use super::source::{CODEX_SOURCE_EXEC, CODEX_SOURCE_UNCATEGORIZED, normalize_codex_originator};
 use super::types::{
     CodexInfo, CodexLogEntry, CodexModelMetadata, CodexPayload, CodexResultFields,
     CodexSessionLogEntry, CodexTimestamp,
@@ -21,6 +22,8 @@ static EVENT_MSG_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"event_msg""#));
 static TURN_CONTEXT_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"turn_context""#));
+static SESSION_META_TYPE_FINDER: LazyLock<Finder<'static>> =
+    LazyLock::new(|| Finder::new(br#""type":"session_meta""#));
 static TOKEN_COUNT_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"token_count""#));
 static COMPACT_TYPE_FIELD_FINDER: LazyLock<Finder<'static>> =
@@ -62,6 +65,11 @@ enum CodexLineKind {
 struct CodexExecTimestamps {
     event: String,
     model: String,
+}
+
+struct CodexExecModelState<'a> {
+    current_model: &'a mut Option<String>,
+    current_model_is_fallback: &'a mut bool,
 }
 
 fn is_codex_replay_session(path: &Path) -> bool {
@@ -153,6 +161,7 @@ pub(super) fn visit_codex_session_file(
     let mut previous_totals: Option<CodexRawUsage> = None;
     let mut current_model: Option<String> = None;
     let mut current_model_is_fallback = false;
+    let mut current_originator: Option<String> = None;
     let fallback_timestamp = file_modified_timestamp(path);
     let mut skip_replay = replay_second.is_some();
 
@@ -207,6 +216,7 @@ pub(super) fn visit_codex_session_file(
                     &mut previous_totals,
                     &mut current_model,
                     &mut current_model_is_fallback,
+                    &mut current_originator,
                     &mut visit,
                 )?;
             }
@@ -216,8 +226,11 @@ pub(super) fn visit_codex_session_file(
                         &session_id,
                         &value,
                         &fallback_timestamp,
-                        &mut current_model,
-                        &mut current_model_is_fallback,
+                        CodexExecModelState {
+                            current_model: &mut current_model,
+                            current_model_is_fallback: &mut current_model_is_fallback,
+                        },
+                        current_originator.as_deref(),
                         &mut visit,
                     )?;
                 } else {
@@ -225,8 +238,11 @@ pub(super) fn visit_codex_session_file(
                         &session_id,
                         &line,
                         &fallback_timestamp,
-                        &mut current_model,
-                        &mut current_model_is_fallback,
+                        CodexExecModelState {
+                            current_model: &mut current_model,
+                            current_model_is_fallback: &mut current_model_is_fallback,
+                        },
+                        current_originator.as_deref(),
                         &mut visit,
                     )?;
                 };
@@ -243,6 +259,7 @@ fn visit_codex_session_entry(
     previous_totals: &mut Option<CodexRawUsage>,
     current_model: &mut Option<String>,
     current_model_is_fallback: &mut bool,
+    current_originator: &mut Option<String>,
     visit: &mut impl FnMut(CodexTokenUsageEvent) -> Result<()>,
 ) -> Result<()> {
     let entry_type = value.entry_type.as_deref();
@@ -251,6 +268,14 @@ fn visit_codex_session_entry(
             *current_model = Some(model);
             *current_model_is_fallback = false;
         }
+        return Ok(());
+    }
+    if entry_type == Some("session_meta") {
+        *current_originator = value
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.originator.as_deref())
+            .map(|originator| normalize_codex_originator(originator).into_owned());
         return Ok(());
     }
     if entry_type != Some("event_msg") {
@@ -297,6 +322,10 @@ fn visit_codex_session_entry(
         current_model_is_fallback,
     );
 
+    let source = current_originator
+        .clone()
+        .unwrap_or_else(|| CODEX_SOURCE_UNCATEGORIZED.to_string());
+
     visit(CodexTokenUsageEvent {
         session_id: session_id.to_string(),
         timestamp,
@@ -307,6 +336,7 @@ fn visit_codex_session_entry(
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
         is_fallback_model,
+        source: Some(source),
     })
 }
 
@@ -314,8 +344,8 @@ fn add_codex_exec_event(
     session_id: &str,
     value: &CodexLogEntry<'_>,
     fallback_timestamp: &str,
-    current_model: &mut Option<String>,
-    current_model_is_fallback: &mut bool,
+    model_state: CodexExecModelState<'_>,
+    current_originator: Option<&str>,
     visit: &mut impl FnMut(CodexTokenUsageEvent) -> Result<()>,
 ) -> Result<()> {
     let Some(raw_usage) = normalize_headless_codex_usage(value) else {
@@ -332,8 +362,8 @@ fn add_codex_exec_event(
         raw_usage,
         parsed_model,
         timestamps,
-        current_model,
-        current_model_is_fallback,
+        model_state,
+        current_originator,
         visit,
     )
 }
@@ -342,8 +372,8 @@ fn add_codex_exec_event_from_value(
     session_id: &str,
     line: &[u8],
     fallback_timestamp: &str,
-    current_model: &mut Option<String>,
-    current_model_is_fallback: &mut bool,
+    model_state: CodexExecModelState<'_>,
+    current_originator: Option<&str>,
     visit: &mut impl FnMut(CodexTokenUsageEvent) -> Result<()>,
 ) -> Result<()> {
     let Ok(value) = serde_json::from_slice::<Value>(line) else {
@@ -364,8 +394,8 @@ fn add_codex_exec_event_from_value(
         raw_usage,
         parsed_model,
         timestamps,
-        current_model,
-        current_model_is_fallback,
+        model_state,
+        current_originator,
         visit,
     )
 }
@@ -375,16 +405,23 @@ fn visit_codex_exec_usage_event(
     raw_usage: CodexRawUsage,
     parsed_model: Option<String>,
     timestamps: CodexExecTimestamps,
-    current_model: &mut Option<String>,
-    current_model_is_fallback: &mut bool,
+    model_state: CodexExecModelState<'_>,
+    current_originator: Option<&str>,
     visit: &mut impl FnMut(CodexTokenUsageEvent) -> Result<()>,
 ) -> Result<()> {
+    let CodexExecModelState {
+        current_model,
+        current_model_is_fallback,
+    } = model_state;
     let (model, is_fallback_model) = resolve_codex_usage_model(
         parsed_model,
         &timestamps.model,
         current_model,
         current_model_is_fallback,
     );
+    let source = current_originator
+        .map(str::to_string)
+        .unwrap_or_else(|| CODEX_SOURCE_EXEC.to_string());
     visit(CodexTokenUsageEvent {
         session_id: session_id.to_string(),
         timestamp: timestamps.event,
@@ -395,13 +432,17 @@ fn visit_codex_exec_usage_event(
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
         is_fallback_model,
+        source: Some(source),
     })
 }
 
 fn codex_line_usage_kind(line: &[u8]) -> Option<CodexLineKind> {
     let has_event_msg = EVENT_MSG_TYPE_FINDER.find(line).is_some();
     let has_token_count = has_event_msg && TOKEN_COUNT_TYPE_FINDER.find(line).is_some();
-    if TURN_CONTEXT_TYPE_FINDER.find(line).is_some() || has_token_count {
+    if has_token_count
+        || TURN_CONTEXT_TYPE_FINDER.find(line).is_some()
+        || SESSION_META_TYPE_FINDER.find(line).is_some()
+    {
         return Some(CodexLineKind::Session);
     }
     let has_compact_type = COMPACT_TYPE_FIELD_FINDER.find(line).is_some();

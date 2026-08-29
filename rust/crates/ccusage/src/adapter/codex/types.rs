@@ -79,6 +79,8 @@ pub(super) struct CodexPayload<'a> {
     pub(super) model: Option<Cow<'a, str>>,
     #[serde(rename = "model_name", borrow, default)]
     pub(super) model_name: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(super) originator: Option<Cow<'a, str>>,
     #[serde(
         borrow,
         default,

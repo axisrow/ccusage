@@ -607,6 +607,7 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 150,
             is_fallback_model: false,
+            source: None,
         }];
 
         let report = adapter::codex::report_json(
@@ -648,6 +649,7 @@ mod tests {
             reasoning_output_tokens: 3,
             total_tokens: 131,
             is_fallback_model: false,
+            source: None,
         }];
 
         let report = adapter::codex::report_json(
@@ -685,6 +687,7 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 15,
             is_fallback_model: false,
+            source: None,
         }];
 
         let standard = adapter::codex::report_json(
@@ -721,6 +724,7 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 110,
             is_fallback_model: false,
+            source: None,
         }];
 
         let standard = adapter::codex::report_json(

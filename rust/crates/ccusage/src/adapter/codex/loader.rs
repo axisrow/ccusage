@@ -157,6 +157,7 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 150,
             is_fallback_model: false,
+            source: None,
         }
     }
 
@@ -311,6 +312,227 @@ mod tests {
         assert_eq!(events[2].output_tokens, 4);
         assert_eq!(events[2].reasoning_output_tokens, 1);
         assert_eq!(events[2].total_tokens, 14);
+    }
+
+    fn rollout_with_originator(originator: &str, timestamp: &str) -> String {
+        [
+            json!({
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-id",
+                    "cwd": "/home/user/project",
+                    "originator": originator,
+                    "cli_version": "0.42.0",
+                },
+            })
+            .to_string(),
+            json!({
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model": "gpt-5",
+                        "last_token_usage": {
+                            "input_tokens": 100,
+                            "cached_input_tokens": 10,
+                            "output_tokens": 50,
+                            "reasoning_output_tokens": 0,
+                            "total_tokens": 150,
+                        },
+                    },
+                },
+            })
+            .to_string(),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn attaches_normalized_sources_from_session_meta_originators() {
+        let fixture = fs_fixture!({
+            "2026-01-02T00-00-00-a.jsonl": rollout_with_originator("codex-tui", "2026-01-02T00:00:00.000Z"),
+            "2026-01-02T00-01-00-b.jsonl": rollout_with_originator("codex_cli_rs", "2026-01-02T00:01:00.000Z"),
+            "2026-01-02T00-02-00-c.jsonl": rollout_with_originator("codex_exec", "2026-01-02T00:02:00.000Z"),
+            "2026-01-02T00-03-00-d.jsonl": rollout_with_originator("Codex Desktop", "2026-01-02T00:03:00.000Z"),
+            "2026-01-02T00-04-00-e.jsonl": rollout_with_originator("codex_vscode", "2026-01-02T00:04:00.000Z"),
+            "2026-01-02T00-05-00-f.jsonl": rollout_with_originator("codex_python_sdk", "2026-01-02T00:05:00.000Z"),
+            "2026-01-02T00-06-00-g.jsonl": rollout_with_originator("probe", "2026-01-02T00:06:00.000Z"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        let expected_sources = [
+            "CLI",
+            "CLI",
+            "Exec",
+            "Desktop App",
+            "VS Code",
+            "SDK",
+            "probe",
+        ];
+        for (event, expected) in events.iter().zip(expected_sources) {
+            assert_eq!(event.source.as_deref(), Some(expected), "{event:?}");
+        }
+    }
+
+    #[test]
+    fn marks_rollouts_without_session_meta_as_uncategorized() {
+        let fixture = fs_fixture!({
+            "2026-01-02T00-00-00-no-meta.jsonl": [
+                json!({
+                    "timestamp": "2026-01-02T00:00:00.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "model": "gpt-5",
+                            "last_token_usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 10,
+                                "output_tokens": 50,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 150,
+                            },
+                        },
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("Uncategorized"));
+    }
+
+    #[test]
+    fn marks_empty_session_meta_originator_as_uncategorized() {
+        let fixture = fs_fixture!({
+            "2026-01-02T00-00-00-empty.jsonl": rollout_with_originator("", "2026-01-02T00:00:00.000Z"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("Uncategorized"));
+    }
+
+    #[test]
+    fn resets_originator_when_a_later_session_meta_omits_it() {
+        let fixture = fs_fixture!({
+            "2026-01-02T00-00-00-resumed.jsonl": [
+                json!({
+                    "timestamp": "2026-01-02T00:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "cwd": "/home/user/project",
+                        "originator": "codex_vscode",
+                        "cli_version": "0.42.0",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "timestamp": "2026-01-02T00:01:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "parent-xyz",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "timestamp": "2026-01-02T00:02:00.000Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "model": "gpt-5",
+                            "last_token_usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 10,
+                                "output_tokens": 50,
+                                "reasoning_output_tokens": 0,
+                                "total_tokens": 150,
+                            },
+                        },
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("Uncategorized"));
+    }
+
+    #[test]
+    fn marks_headless_codex_exec_usage_as_exec_source() {
+        let fixture = fs_fixture!({
+            "run.jsonl": [
+                json!({
+                    "type": "turn.completed",
+                    "timestamp": "2026-01-02T03:04:05.000Z",
+                    "model": "gpt-5.2-codex",
+                    "usage": {
+                        "input_tokens": 120,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 30,
+                        "total_tokens": 150,
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("Exec"));
+    }
+
+    #[test]
+    fn headless_usage_after_session_meta_inherits_parsed_originator() {
+        let fixture = fs_fixture!({
+            "run.jsonl": [
+                json!({
+                    "timestamp": "2026-01-02T00:00:00.000Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-id",
+                        "cwd": "/home/user/project",
+                        "originator": "codex_vscode",
+                        "cli_version": "0.42.0",
+                    },
+                })
+                .to_string(),
+                json!({
+                    "type": "turn.completed",
+                    "timestamp": "2026-01-02T03:04:05.000Z",
+                    "model": "gpt-5.2-codex",
+                    "usage": {
+                        "input_tokens": 120,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 30,
+                        "total_tokens": 150,
+                    },
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        });
+
+        let events = load_codex_events_from_directory(fixture.root(), true).unwrap();
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source.as_deref(), Some("VS Code"));
     }
 
     #[test]
