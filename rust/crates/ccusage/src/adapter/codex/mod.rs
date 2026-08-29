@@ -3,6 +3,7 @@ mod loader;
 mod parser;
 mod paths;
 mod report;
+mod source;
 mod speed;
 mod types;
 
@@ -133,6 +134,7 @@ mod tests {
                 reasoning_output_tokens: 0,
                 total_tokens: 105,
                 is_fallback_model: false,
+                source: None,
             }],
             AgentReportKind::Daily,
             Some("UTC"),
@@ -176,6 +178,7 @@ mod tests {
                     reasoning_output_tokens: 0,
                     total_tokens: 105,
                     is_fallback_model: false,
+                    source: None,
                 },
                 CodexTokenUsageEvent {
                     session_id: "session-1".to_string(),
@@ -187,6 +190,7 @@ mod tests {
                     reasoning_output_tokens: 0,
                     total_tokens: 53,
                     is_fallback_model: false,
+                    source: None,
                 },
             ],
             AgentReportKind::Daily,
@@ -418,6 +422,7 @@ mod tests {
                 reasoning_output_tokens: 2,
                 total_tokens: 147,
                 is_fallback_model: false,
+                source: None,
             },
             CodexTokenUsageEvent {
                 session_id: "/workspace/api/session-a.jsonl".to_string(),
@@ -429,6 +434,7 @@ mod tests {
                 reasoning_output_tokens: 0,
                 total_tokens: 80,
                 is_fallback_model: true,
+                source: None,
             },
             CodexTokenUsageEvent {
                 session_id: "/workspace/web/session-b.jsonl".to_string(),
@@ -440,6 +446,7 @@ mod tests {
                 reasoning_output_tokens: 0,
                 total_tokens: 12,
                 is_fallback_model: false,
+                source: None,
             },
             CodexTokenUsageEvent {
                 session_id: "ignored-missing-model".to_string(),
@@ -451,6 +458,7 @@ mod tests {
                 reasoning_output_tokens: 0,
                 total_tokens: 1_998,
                 is_fallback_model: false,
+                source: None,
             },
         ];
 

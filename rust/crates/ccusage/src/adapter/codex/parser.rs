@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::{CodexRawUsage, CodexTokenUsageEvent, Result, TimestampMs};
 
+use super::source::{CODEX_SOURCE_EXEC, CODEX_SOURCE_UNCATEGORIZED, normalize_codex_originator};
 use super::types::{
     CodexInfo, CodexLogEntry, CodexModelMetadata, CodexPayload, CodexResultFields,
     CodexSessionLogEntry, CodexTimestamp,
@@ -21,6 +22,8 @@ static EVENT_MSG_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"event_msg""#));
 static TURN_CONTEXT_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"turn_context""#));
+static SESSION_META_TYPE_FINDER: LazyLock<Finder<'static>> =
+    LazyLock::new(|| Finder::new(br#""type":"session_meta""#));
 static TOKEN_COUNT_TYPE_FINDER: LazyLock<Finder<'static>> =
     LazyLock::new(|| Finder::new(br#""type":"token_count""#));
 static COMPACT_TYPE_FIELD_FINDER: LazyLock<Finder<'static>> =
@@ -153,6 +156,7 @@ pub(super) fn visit_codex_session_file(
     let mut previous_totals: Option<CodexRawUsage> = None;
     let mut current_model: Option<String> = None;
     let mut current_model_is_fallback = false;
+    let mut current_originator: Option<String> = None;
     let fallback_timestamp = file_modified_timestamp(path);
     let mut skip_replay = replay_second.is_some();
 
@@ -207,6 +211,7 @@ pub(super) fn visit_codex_session_file(
                     &mut previous_totals,
                     &mut current_model,
                     &mut current_model_is_fallback,
+                    &mut current_originator,
                     &mut visit,
                 )?;
             }
@@ -243,6 +248,7 @@ fn visit_codex_session_entry(
     previous_totals: &mut Option<CodexRawUsage>,
     current_model: &mut Option<String>,
     current_model_is_fallback: &mut bool,
+    current_originator: &mut Option<String>,
     visit: &mut impl FnMut(CodexTokenUsageEvent) -> Result<()>,
 ) -> Result<()> {
     let entry_type = value.entry_type.as_deref();
@@ -250,6 +256,16 @@ fn visit_codex_session_entry(
         if let Some(model) = value.payload.as_ref().and_then(codex_model_from_payload) {
             *current_model = Some(model);
             *current_model_is_fallback = false;
+        }
+        return Ok(());
+    }
+    if entry_type == Some("session_meta") {
+        if let Some(originator) = value
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.originator.as_deref())
+        {
+            *current_originator = Some(normalize_codex_originator(originator).into_owned());
         }
         return Ok(());
     }
@@ -297,6 +313,10 @@ fn visit_codex_session_entry(
         current_model_is_fallback,
     );
 
+    let source = current_originator
+        .clone()
+        .unwrap_or_else(|| CODEX_SOURCE_UNCATEGORIZED.to_string());
+
     visit(CodexTokenUsageEvent {
         session_id: session_id.to_string(),
         timestamp,
@@ -307,6 +327,7 @@ fn visit_codex_session_entry(
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
         is_fallback_model,
+        source: Some(source),
     })
 }
 
@@ -395,13 +416,17 @@ fn visit_codex_exec_usage_event(
         reasoning_output_tokens: raw_usage.reasoning_output_tokens,
         total_tokens: raw_usage.total_tokens,
         is_fallback_model,
+        source: Some(CODEX_SOURCE_EXEC.to_string()),
     })
 }
 
 fn codex_line_usage_kind(line: &[u8]) -> Option<CodexLineKind> {
     let has_event_msg = EVENT_MSG_TYPE_FINDER.find(line).is_some();
     let has_token_count = has_event_msg && TOKEN_COUNT_TYPE_FINDER.find(line).is_some();
-    if TURN_CONTEXT_TYPE_FINDER.find(line).is_some() || has_token_count {
+    if has_token_count
+        || TURN_CONTEXT_TYPE_FINDER.find(line).is_some()
+        || SESSION_META_TYPE_FINDER.find(line).is_some()
+    {
         return Some(CodexLineKind::Session);
     }
     let has_compact_type = COMPACT_TYPE_FIELD_FINDER.find(line).is_some();
